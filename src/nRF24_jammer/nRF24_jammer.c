@@ -443,11 +443,6 @@ static void render_nightfall_menu(Canvas* canvas, NightfallMenuType menu) {
             canvas_draw_str(canvas, 18, y, names[idx]);
         }
     }
-    canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 64, 20, AlignCenter, AlignCenter, "Nightfall's Options");
-    canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str_aligned(canvas, 64, 36, AlignCenter, AlignCenter, names[menu]);
-    canvas_draw_str_aligned(canvas, 64, 54, AlignCenter, AlignCenter, "OK: Start  BACK: Exit");
 }
 
 static void render_callback(Canvas* canvas, void* ctx) {
