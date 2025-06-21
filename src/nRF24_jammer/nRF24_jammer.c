@@ -45,6 +45,12 @@ typedef enum {
     MISC_STATE_ERROR,
 } MiscState;
 
+typedef enum {
+    MISC_MODE_CHANNEL_SWITCHING,
+    MISC_MODE_PACKET_SENDING,
+    MISC_MODE_COUNT
+} MiscMode;
+
 typedef struct {
     FuriMutex* mutex;
     NotificationApp* notifications;
@@ -62,6 +68,7 @@ typedef struct {
     WifiMode wifi_mode;
     MiscState misc_state;
     NightfallMenuType nightfall_menu;
+    MiscMode misc_mode;
     uint8_t wifi_channel;
     uint8_t misc_start;
     uint8_t misc_stop;
@@ -159,25 +166,53 @@ static void jam_ble(PluginState* state) {
 }
 
 static void jam_misc(PluginState* state) {
-    nrf24_set_tx_mode(nrf24);
-    nrf24_startConstCarrier(nrf24, 7, 0);
+    if(state->misc_mode == MISC_MODE_CHANNEL_SWITCHING){
+        nrf24_set_tx_mode(nrf24);
+        nrf24_startConstCarrier(nrf24, 7, 0);
     
-    while(!state->is_stop) {
-        for(int ch = state->misc_start; ch < state->misc_stop; ch++) {
-            nrf24_write_reg(nrf24, REG_RF_CH, ch);
+        while(!state->is_stop) {
+            for(uint8_t ch = state->misc_start; ch < state->misc_stop; ch++) {
+                nrf24_write_reg(nrf24, REG_RF_CH, ch);
+            }
+        }
+    
+        nrf24_stopConstCarrier(nrf24);
+    } else {
+        uint8_t mac[] = {0xFF, 0xFF};
+        nrf24_configure(nrf24, 2, mac, mac, 2, state->misc_start, true, true);
+
+        uint8_t setup;
+        nrf24_read_reg(nrf24, REG_RF_SETUP, &setup, 1);
+        setup = (setup & 0xF8) | 7;
+        nrf24_write_reg(nrf24, REG_RF_SETUP, setup);
+
+        uint8_t tx[3] = {W_TX_PAYLOAD_NOACK, mac[0], mac[1]};
+        nrf24_set_tx_mode(nrf24);
+
+        while(!state->is_stop) {
+            for(uint8_t ch = state->misc_start; ch < state->misc_stop; ch++) {
+                nrf24_write_reg(nrf24, REG_RF_CH, ch);
+                nrf24_spi_trx(nrf24, tx, NULL, 3, nrf24_TIMEOUT);
+            }
         }
     }
-    
-    nrf24_stopConstCarrier(nrf24);
+
+    nrf24_set_idle(nrf24);
 }
 
 static void jam_wifi(PluginState* state) {
+    // Für maximale Effizienz: 
+    // - WIFI_MODE_ALL: Jammen von RF_CH 1 bis 83 (2402–2483 MHz, deckt alle 2,4 GHz WiFi-Kanäle weltweit ab)
+    // - WIFI_MODE_SELECT: Jammen von Mittenfrequenz ±10 (insgesamt 21 Werte) für den gewählten Kanal
+    static const uint8_t wifi_rf_channels[13] = {
+        1, 6, 11, 16, 21, 26, 31, 36, 41, 46, 51, 56, 61
+    };
     uint8_t mac[] = {0xFF, 0xFF};
     nrf24_configure(nrf24, 2, mac, mac, 2, 1, true, true);
 
     uint8_t setup;
     nrf24_read_reg(nrf24, REG_RF_SETUP, &setup, 1);
-    setup = (setup & 0xF8) | 7;
+    setup = (setup & 0xF8) | 7; // Maximale Sendeleistung
     nrf24_write_reg(nrf24, REG_RF_SETUP, setup);
 
     uint8_t tx[3] = {W_TX_PAYLOAD_NOACK, mac[0], mac[1]};
@@ -185,19 +220,24 @@ static void jam_wifi(PluginState* state) {
 
     while(!state->is_stop) {
         if(state->wifi_mode == WIFI_MODE_ALL) {
-            for(int channel = 0; channel < 13 && !state->is_stop; channel++) {
-                for(int ch = (channel * 5) + 1; ch < (channel * 5) + 23 && !state->is_stop; ch++) {
+            // Jammen von RF_CH 1 bis 83 (WiFi 2,4 GHz Bereich)
+            for(int ch = 1; ch <= 83 && !state->is_stop; ch++) {
+                nrf24_write_reg(nrf24, REG_RF_CH, ch);
+                nrf24_spi_trx(nrf24, tx, NULL, 3, nrf24_TIMEOUT);
+            }
+        } else {
+            // Jammen von Mittenfrequenz ±10 (insgesamt 21 Werte)
+            int base_ch = wifi_rf_channels[state->wifi_channel];
+            for(int offset = -10; offset <= 10 && !state->is_stop; offset++) {
+                int ch = base_ch + offset;
+                if(ch >= 0 && ch <= 125) {
                     nrf24_write_reg(nrf24, REG_RF_CH, ch);
                     nrf24_spi_trx(nrf24, tx, NULL, 3, nrf24_TIMEOUT);
                 }
             }
-        } else {
-            for(int ch = (state->wifi_channel * 5) + 1; ch < (state->wifi_channel * 5) + 23 && !state->is_stop; ch++) {
-                nrf24_write_reg(nrf24, REG_RF_CH, ch);
-                nrf24_spi_trx(nrf24, tx, NULL, 3, nrf24_TIMEOUT);
-            }
         }
     }
+    nrf24_set_idle(nrf24);
 }
 
 static void jam_zigbee(PluginState* state) {
@@ -297,17 +337,21 @@ static void render_settings_screen(Canvas* canvas, PluginState* state) {
         snprintf(buffer, sizeof(buffer), "Start channel: %d", state->misc_start);
         canvas_draw_str_aligned(canvas, 64, 20, AlignCenter, AlignCenter, buffer);
         canvas_set_font(canvas, FontSecondary);
-        canvas_draw_str_aligned(canvas, 64, 35, AlignCenter, AlignCenter, "Press OK to set stop");
+        snprintf(buffer, sizeof(buffer), "Mode: %s", 
+            state->misc_mode == MISC_MODE_CHANNEL_SWITCHING ? "Channel Switching" : "Packet Sending");
+        canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignCenter, buffer);
+        canvas_draw_str_aligned(canvas, 64, 40, AlignCenter, AlignCenter, "Press OK to set stop");
     } else if(state->misc_state == MISC_STATE_SET_STOP) {
         snprintf(buffer, sizeof(buffer), "Start: %d Stop: %d", state->misc_start, state->misc_stop);
         canvas_draw_str_aligned(canvas, 64, 20, AlignCenter, AlignCenter, buffer);
-        
+        canvas_set_font(canvas, FontSecondary);
+        snprintf(buffer, sizeof(buffer), "Mode: %s", 
+            state->misc_mode == MISC_MODE_CHANNEL_SWITCHING ? "Channel Switching" : "Packet Sending");
+        canvas_draw_str_aligned(canvas, 64, 30, AlignCenter, AlignCenter, buffer);
         if(state->misc_stop > state->misc_start) {
-            canvas_set_font(canvas, FontSecondary);
-            canvas_draw_str_aligned(canvas, 64, 35, AlignCenter, AlignCenter, "Press OK to start");
+            canvas_draw_str_aligned(canvas, 64, 40, AlignCenter, AlignCenter, "Press OK to start");
         } else {
-            canvas_set_font(canvas, FontSecondary);
-            canvas_draw_str_aligned(canvas, 64, 35, AlignCenter, AlignCenter, "Error: Start < Stop");
+            canvas_draw_str_aligned(canvas, 64, 40, AlignCenter, AlignCenter, "Error: Start < Stop");
         }
     } else if(state->misc_state == MISC_STATE_ERROR) {
         canvas_set_font(canvas, FontPrimary);
@@ -369,6 +413,36 @@ static void render_nightfall_menu(Canvas* canvas, NightfallMenuType menu) {
     static const char* names[NIGHTFALL_COUNT] = {
         "PS4 Gamepad", "PS5 Gamepad", "Xbox Gamepad", "Switch Gamepad", "Wireless Audio", "AirPods/Pro"
     };
+    const int visible_count = 4; // Wie im File-Explorer
+    int scroll_offset = 0;
+    // Berechne scroll_offset so, dass Auswahl immer sichtbar bleibt
+    if(menu < visible_count/2) {
+        scroll_offset = 0;
+    } else if(menu > NIGHTFALL_COUNT - 1 - visible_count/2) {
+        scroll_offset = NIGHTFALL_COUNT - visible_count;
+    } else {
+        scroll_offset = menu - visible_count/2;
+    }
+    if(scroll_offset < 0) scroll_offset = 0;
+    if(scroll_offset > NIGHTFALL_COUNT - visible_count) scroll_offset = NIGHTFALL_COUNT - visible_count;
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 64, 8, AlignCenter, AlignCenter, "Nightfall's Options");
+    canvas_set_font(canvas, FontSecondary);
+    // Abstand wie am Anfang: 12 Pixel pro Eintrag
+    for(int i = 0; i < visible_count; i++) {
+        int idx = scroll_offset + i;
+        if(idx >= NIGHTFALL_COUNT) break;
+        int y = 22 + i * 12;
+        if(idx == menu) {
+            // Markiere die aktuelle Auswahl
+            canvas_draw_box(canvas, 12, y - 8, 104, 12);
+            canvas_set_color(canvas, ColorWhite);
+            canvas_draw_str(canvas, 18, y, names[idx]);
+            canvas_set_color(canvas, ColorBlack);
+        } else {
+            canvas_draw_str(canvas, 18, y, names[idx]);
+        }
+    }
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str_aligned(canvas, 64, 20, AlignCenter, AlignCenter, "Nightfall's Options");
     canvas_set_font(canvas, FontSecondary);
@@ -379,6 +453,10 @@ static void render_nightfall_menu(Canvas* canvas, NightfallMenuType menu) {
 static void render_callback(Canvas* canvas, void* ctx) {
     PluginState* state = ctx;
     canvas_clear(canvas);
+    // Rahmen nur zeichnen, wenn NICHT im Nightfall-Feature-Auswahlmenü
+    if(!(state->current_menu == MENU_NIGHTFALL && state->nightfall_menu_active && !state->is_running)) {
+        canvas_draw_frame(canvas, 0, 0, 128, 64);
+    }
     canvas_draw_frame(canvas, 0, 0, 128, 64);
     if(state->current_menu == MENU_NIGHTFALL && state->nightfall_menu_active && state->is_running) {
         canvas_set_font(canvas, FontPrimary);
@@ -460,6 +538,14 @@ static void handle_wifi_input(PluginState* state, InputKey key) {
 }
 
 static void handle_nightfall_menu_input(PluginState* state, InputKey key) {
+
+    if(key == InputKeyUp) {
+        state->nightfall_menu = (state->nightfall_menu == 0) ? (NIGHTFALL_COUNT - 1) : (state->nightfall_menu - 1);
+    } else if(key == InputKeyDown) {
+        state->nightfall_menu = (state->nightfall_menu + 1) % NIGHTFALL_COUNT;
+    } else if(key == InputKeyLeft || key == InputKeyRight) {
+        // Optional: keine Aktion oder wie gehabt
+    } else if(key == InputKeyBack) {
     if(key == InputKeyUp || key == InputKeyRight) {
         state->nightfall_menu = (state->nightfall_menu + 1) % NIGHTFALL_COUNT;
     } else if(key == InputKeyDown || key == InputKeyLeft) {
@@ -492,6 +578,7 @@ int32_t nRF24_jammer_app(void* p) {
     state->hold_counter = 0;
     state->nightfall_menu_active = false;
     state->nightfall_menu = NIGHTFALL_PS4;
+    state->misc_mode = MISC_MODE_CHANNEL_SWITCHING;
     
     for(int i = 0; i < 125; i++) drone_channels[i] = i;
     
@@ -671,7 +758,7 @@ int32_t nRF24_jammer_app(void* p) {
                     state->hold_counter = 0;
                     if(!state->is_running) {
                         if(state->current_menu == MENU_MISC && state->misc_state != MISC_STATE_IDLE) {
-                            handle_settings_input(state, InputKeyLeft);
+                            state->misc_mode = (state->misc_mode == 0) ? (MISC_MODE_COUNT - 1) : (state->misc_mode - 1);
                         } else if(state->current_menu == MENU_WIFI && state->wifi_menu_active) {
                             if(state->wifi_channel_select) {
                                 handle_wifi_input(state, InputKeyLeft);
@@ -691,7 +778,7 @@ int32_t nRF24_jammer_app(void* p) {
                     state->hold_counter = 0;
                     if(!state->is_running) {
                         if(state->current_menu == MENU_MISC && state->misc_state != MISC_STATE_IDLE) {
-                            handle_settings_input(state, InputKeyRight);
+                            state->misc_mode = (state->misc_mode + 1) % MISC_MODE_COUNT;
                         } else if(state->current_menu == MENU_WIFI && state->wifi_menu_active) {
                             if(state->wifi_channel_select) {
                                 handle_wifi_input(state, InputKeyRight);

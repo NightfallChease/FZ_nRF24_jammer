@@ -15,8 +15,6 @@ Attention: The deliberate jamming of radio connections might be illegal in your 
 
 The developer assumes no liability for any damages or legal consequences arising from the use of this software.
 
----
-
 ## ✨ Newly Added Features
 
 - **Nightfall's Options Submenu:**
