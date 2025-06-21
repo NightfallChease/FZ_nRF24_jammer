@@ -15,17 +15,33 @@ Attention: The deliberate jamming of radio connections might be illegal in your 
 
 The developer assumes no liability for any damages or legal consequences arising from the use of this software.
 
-## ✨ Newly Added Features
+## ✨ Newly Added Features (2025)
 
 - **Nightfall's Options Submenu:**
-  - Added a new submenu for custom jamming profiles: PS4, PS5, Xbox, Switch, Wireless Audio, and AirPods/Pro.
-  - Each profile jams on the correct frequencies/protocols for the target device.
+  - Custom jamming profiles: PS4, PS5, Xbox, Switch, Wireless Audio, AirPods/Pro.
   - BLE-based devices (PS4, PS5, AirPods/Pro) use BLE jamming logic (channels 2, 26, 80).
   - Proprietary devices (Xbox, Switch, Wireless Audio) use constant carrier jamming on their respective channels.
 
+- **WiFi Jammer Optimized for EU/DE:**
+  - Optimized for European WiFi (channels 1–13, 2.4 GHz).
+  - "All Channels" jams the entire 2.4 GHz band (RF_CH 1–83) for maximum effect.
+  - "Single Channel" jams ±10 RF_CH around the selected channel for strong, focused jamming.
+  - All WiFi networks (WPA2, WPA3, WPS, etc.) are jammed identically (encryption does not matter for jamming!).
+
 - **Improved Menu Navigation:**
-  - Enhanced submenu and jamming screen navigation to prevent getting stuck.
-  - BACK button always exits submenus and jamming screens as expected.
+  - Submenus and jamming screens are now robust: BACK always exits, no more getting stuck.
+  - Nightfall menu bug fixed (no more double rendering).
+
+- **General Stability:**
+  - Code cleanup, bugfixes, and improved error handling.
+  - More responsive UI and key handling.
 
 ---
 ![Screenshot 2025-06-19 021311](https://github.com/user-attachments/assets/e08dde06-e35f-4ce2-85f6-1e9157ecde51)
+
+## Usage Notes
+- The jammer only affects 2.4 GHz WiFi (not 5 GHz).
+- Encryption (WPA2, WPA3, WPS) does not protect against jamming.
+- Use responsibly and only in authorized environments.
+
+---
